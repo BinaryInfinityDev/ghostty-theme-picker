@@ -1,0 +1,22 @@
+# A deliberately low-contrast theme, useful for trying the contrast filter.
+palette = 0=#2a2a2a
+palette = 1=#5a4a4a
+palette = 2=#4a5a4a
+palette = 3=#5a5a4a
+palette = 4=#4a4a5a
+palette = 5=#5a4a5a
+palette = 6=#4a5a5a
+palette = 7=#5a5a5a
+palette = 8=#3a3a3a
+palette = 9=#6a5a5a
+palette = 10=#5a6a5a
+palette = 11=#6a6a5a
+palette = 12=#5a5a6a
+palette = 13=#6a5a6a
+palette = 14=#5a6a6a
+palette = 15=#6a6a6a
+background = 3a3a3a
+foreground = 4e4e4e
+cursor-color = 5a5a5a
+selection-background = 4a4a4a
+selection-foreground = 5e5e5e
