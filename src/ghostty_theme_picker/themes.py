@@ -196,9 +196,13 @@ def _candidate_theme_dirs() -> list[Path]:
 
 
 def find_themes_dir(override: str | None = None) -> Path | None:
-    """Return the first directory that actually yields theme files, or ``None``.
+    """Return a directory to load Ghostty themes from, or ``None``.
 
-    We require at least one parseable theme so that a directory which merely
+    An explicit ``override`` (``--themes-dir`` / ``GHOSTTY_THEMES_DIR``) is
+    honored whenever it is a directory, even if it currently holds no parseable
+    themes -- an explicit choice should surface a clear "no themes found" error
+    rather than silently falling back to auto-discovery. During auto-discovery
+    we instead require at least one parseable theme, so a directory that merely
     exists (e.g. an unrelated cask/version folder) doesn't shadow a real one.
     """
     if override:

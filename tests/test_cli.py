@@ -229,6 +229,25 @@ class ApplyTests(unittest.TestCase):
             self.assertIn("not found", err)
 
 
+class PoolFileTests(unittest.TestCase):
+    def test_missing_pool_file_exits_cleanly(self):
+        with TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "picker.toml"
+            code, _, err = run(
+                [
+                    "compare",
+                    "--themes-dir",
+                    SAMPLE_THEMES_DIR,
+                    "--config",
+                    str(cfg),
+                    "--pool-file",
+                    str(Path(tmp) / "nope.txt"),
+                ]
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("pool-file", err)
+
+
 class InfoTests(unittest.TestCase):
     def test_info_runs(self):
         with TemporaryDirectory() as tmp:

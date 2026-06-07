@@ -112,6 +112,12 @@ def apply_theme(
     if existed and backup and original != new_text:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         backup_path = config_path.with_name(f"{config_path.name}.bak-{stamp}")
+        # Second-granularity stamps can collide on rapid re-applies; never
+        # clobber an existing backup -- add a counter suffix instead.
+        counter = 1
+        while backup_path.exists():
+            backup_path = config_path.with_name(f"{config_path.name}.bak-{stamp}-{counter}")
+            counter += 1
         backup_path.write_text(original, encoding="utf-8")
 
     config_path.parent.mkdir(parents=True, exist_ok=True)

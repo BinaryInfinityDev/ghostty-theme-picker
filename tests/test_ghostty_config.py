@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import ghostty_theme_picker.ghostty_config as gc
 from ghostty_theme_picker.ghostty_config import apply_theme, set_theme_in_text
 
 
@@ -79,6 +80,25 @@ class ApplyThemeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with self.assertRaises(FileNotFoundError):
                 apply_theme("X", Path(tmp) / "nope", create=False)
+
+    def test_rapid_reapply_keeps_distinct_backups(self):
+        # Freeze the timestamp so both writes land in the "same second".
+        orig = gc.time.strftime
+        gc.time.strftime = lambda fmt: "20260101-000000"
+        try:
+            with TemporaryDirectory() as tmp:
+                path = Path(tmp) / "config"
+                path.write_text("theme = One\n")
+                first = apply_theme("Two", path)
+                second = apply_theme("Three", path)
+                self.assertIsNotNone(first.backup)
+                self.assertIsNotNone(second.backup)
+                # Distinct files, and the first restore point is not clobbered.
+                self.assertNotEqual(first.backup, second.backup)
+                self.assertEqual(first.backup.read_text(), "theme = One\n")
+                self.assertEqual(second.backup.read_text(), "theme = Two\n")
+        finally:
+            gc.time.strftime = orig
 
 
 if __name__ == "__main__":

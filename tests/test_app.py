@@ -1,15 +1,25 @@
 """Tests for the interactive App's pure state logic (no TTY required)."""
 
+import types
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import ghostty_theme_picker.tui as tui_mod
 from ghostty_theme_picker.color import Painter
 from ghostty_theme_picker.config import State, load_state
 from ghostty_theme_picker.themes import load_themes_from_dir
 from ghostty_theme_picker.tui import App
 
 from . import SAMPLE_THEMES_DIR
+
+
+class _FakeTerm:
+    def __init__(self):
+        self.last = ""
+
+    def render(self, text):
+        self.last = text
 
 
 class AppLogicTests(unittest.TestCase):
@@ -23,6 +33,30 @@ class AppLogicTests(unittest.TestCase):
             Painter("256"),
             Path(tmp) / "ghostty.config",
         ), cfg
+
+    def _draw_with_size(self, cols, rows):
+        with TemporaryDirectory() as tmp:
+            app, _ = self.make_app(tmp)
+            app.term = _FakeTerm()
+            orig = tui_mod.get_size
+            tui_mod.get_size = lambda: types.SimpleNamespace(cols=cols, rows=rows)
+            try:
+                ok = app.draw_compare(
+                    "Dracula", "Nord", [("Dracula", "Nord")], 0, finals=False
+                )
+            finally:
+                tui_mod.get_size = orig
+            return ok, app.term.last
+
+    def test_draw_compare_too_small_returns_false(self):
+        # Guards run_queue against recording a vote when previews can't render.
+        ok, rendered = self._draw_with_size(10, 5)
+        self.assertFalse(ok)
+        self.assertIn("too small", rendered)
+
+    def test_draw_compare_large_returns_true(self):
+        ok, _ = self._draw_with_size(120, 40)
+        self.assertTrue(ok)
 
     def test_vote_records_and_persists(self):
         with TemporaryDirectory() as tmp:

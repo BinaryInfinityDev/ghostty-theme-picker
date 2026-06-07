@@ -50,7 +50,11 @@ def _apply_pool_options(state: State, args, available: dict[str, Theme]) -> None
     if getattr(args, "pool", None):
         names = [n.strip() for n in args.pool.split(",") if n.strip()]
     elif getattr(args, "pool_file", None):
-        text = Path(args.pool_file).expanduser().read_text(encoding="utf-8")
+        try:
+            text = Path(args.pool_file).expanduser().read_text(encoding="utf-8")
+        except OSError as exc:
+            sys.stderr.write(f"Could not read --pool-file: {exc}\n")
+            raise SystemExit(2)
         names = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
     if names is not None:
         unknown = [n for n in names if n not in available]

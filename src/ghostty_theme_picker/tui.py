@@ -209,8 +209,24 @@ class App:
                 idx += 1
                 continue
 
-            self.draw_compare(a, b, queue, idx, finals)
+            rendered = self.draw_compare(a, b, queue, idx, finals)
             key = self.term.read_key()
+
+            if not rendered:
+                # Terminal is too small to show the previews; a blind ←/→ must
+                # not be counted as a vote. Allow only quit/menu, else redraw.
+                if key == KEY_CTRL_C:
+                    return "quit"
+                if key in (KEY_ESC, "m"):
+                    action = self.menu(finals)
+                    if action == "quit":
+                        return "quit"
+                    if action == "finals":
+                        self.compare_loop(finals=True)
+                        return "rebuild"
+                    if action == "rebuild":
+                        return "rebuild"
+                continue  # redraw the same pair (e.g. after a resize)
 
             if key in (KEY_LEFT, "h"):
                 self.do_vote(a, b)
@@ -266,14 +282,15 @@ class App:
         queue: list[tuple[str, str]],
         idx: int,
         finals: bool,
-    ) -> None:
+    ) -> bool:
+        """Render the comparison; return ``False`` if the terminal is too small."""
         size = get_size()
         if size.cols < MIN_COLS or size.rows < MIN_ROWS:
             self.term.render(
                 f"\n  Terminal too small ({size.cols}x{size.rows}).\n"
                 f"  Please resize to at least {MIN_COLS}x{MIN_ROWS}.\n"
             )
-            return
+            return False
 
         groups = self._groups_for(finals)
         total = ranking.total_pairs_in_groups(groups)
@@ -341,6 +358,7 @@ class App:
         lines.append(self._clip(f"{BOLD}{msg}{RESET}" if msg else "", size.cols))
 
         self.term.render("\n".join(lines))
+        return True
 
     # -- choose-side prompt -------------------------------------------------
 
