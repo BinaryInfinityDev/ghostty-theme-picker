@@ -74,20 +74,49 @@ class PreviewTests(unittest.TestCase):
 
 
 class RankTests(unittest.TestCase):
-    def test_rank_outputs_order(self):
+    def _state(self, tmp):
+        cfg = Path(tmp) / "picker.toml"
+        save_state(
+            cfg,
+            State(
+                comparisons=[
+                    ("Dracula", "Nord"),
+                    ("Dracula", "Gruvbox Dark"),
+                    ("Nord", "Gruvbox Dark"),
+                ]
+            ),
+        )
+        return cfg
+
+    def test_rank_outputs_grouped(self):
         with TemporaryDirectory() as tmp:
-            cfg = Path(tmp) / "picker.toml"
-            state = State(
-                comparisons=[("Dracula", "Nord"), ("Dracula", "Gruvbox Dark"), ("Nord", "Gruvbox Dark")]
-            )
-            save_state(cfg, state)
+            cfg = self._state(tmp)
             code, out, _ = run(
                 ["rank", "--themes-dir", SAMPLE_THEMES_DIR, "--config", str(cfg)]
             )
             self.assertEqual(code, 0)
-            # Dracula should be ranked first.
-            lines = [l for l in out.splitlines() if l.strip()]
-            self.assertIn("Dracula", lines[0])
+            self.assertIn("== Dark themes ==", out)
+            self.assertIn("== Light themes ==", out)
+            # Dracula (2-0 among dark) ranks above Nord (1-1) on the dark board.
+            self.assertLess(out.index("Dracula"), out.index("Nord"))
+
+    def test_rank_scheme_dark_only(self):
+        with TemporaryDirectory() as tmp:
+            cfg = self._state(tmp)
+            code, out, _ = run(
+                [
+                    "rank",
+                    "--scheme",
+                    "dark",
+                    "--themes-dir",
+                    SAMPLE_THEMES_DIR,
+                    "--config",
+                    str(cfg),
+                ]
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("Dark themes", out)
+            self.assertNotIn("Light themes", out)
 
 
 class ApplyTests(unittest.TestCase):
@@ -112,7 +141,7 @@ class ApplyTests(unittest.TestCase):
             self.assertIn("theme = Nord", ghostty.read_text())
             self.assertEqual(load_state(cfg).selected, "Nord")
 
-    def test_apply_default_to_top_ranked(self):
+    def test_apply_default_is_combined(self):
         with TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "picker.toml"
             ghostty = Path(tmp) / "ghostty.config"
@@ -130,7 +159,55 @@ class ApplyTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(code, 0)
-            self.assertIn("theme = Dracula", ghostty.read_text())
+            content = ghostty.read_text()
+            self.assertTrue(content.startswith("theme = light:"))
+            self.assertIn("dark:Dracula", content)  # Dracula is the top dark theme
+
+    def test_apply_only_dark(self):
+        with TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "picker.toml"
+            ghostty = Path(tmp) / "ghostty.config"
+            save_state(cfg, State(comparisons=[("Dracula", "Nord")]))
+            code, _, _ = run(
+                [
+                    "apply",
+                    "--only-dark",
+                    "--themes-dir",
+                    SAMPLE_THEMES_DIR,
+                    "--config",
+                    str(cfg),
+                    "--ghostty-config",
+                    str(ghostty),
+                    "--create",
+                ]
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("theme = Dracula\n", ghostty.read_text())
+
+    def test_apply_explicit_light_and_dark(self):
+        with TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "picker.toml"
+            ghostty = Path(tmp) / "ghostty.config"
+            code, _, _ = run(
+                [
+                    "apply",
+                    "--light",
+                    "Solarized Light",
+                    "--dark",
+                    "Nord",
+                    "--themes-dir",
+                    SAMPLE_THEMES_DIR,
+                    "--config",
+                    str(cfg),
+                    "--ghostty-config",
+                    str(ghostty),
+                    "--create",
+                ]
+            )
+            self.assertEqual(code, 0)
+            self.assertIn(
+                "theme = light:Solarized Light,dark:Nord", ghostty.read_text()
+            )
 
     def test_apply_missing_config_without_create(self):
         with TemporaryDirectory() as tmp:

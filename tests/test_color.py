@@ -6,6 +6,8 @@ from ghostty_theme_picker.color import (
     best_text_on,
     contrast_ratio,
     detect_color_mode,
+    ghostty_luminance,
+    is_dark,
     is_light,
     parse_color,
     to_xterm256,
@@ -47,6 +49,27 @@ class ColorMathTests(unittest.TestCase):
     def test_is_light(self):
         self.assertTrue(is_light(RGB(255, 255, 255)))
         self.assertFalse(is_light(RGB(0, 0, 0)))
+
+
+class GhosttyClassificationTests(unittest.TestCase):
+    """Match Ghostty's shouldIncludeTheme: luminance < 0.5 is dark."""
+
+    def test_luminance_endpoints(self):
+        self.assertAlmostEqual(ghostty_luminance(RGB(255, 255, 255)), 1.0, places=6)
+        self.assertAlmostEqual(ghostty_luminance(RGB(0, 0, 0)), 0.0, places=6)
+
+    def test_coefficients(self):
+        # Pure green is the heaviest-weighted channel.
+        self.assertAlmostEqual(ghostty_luminance(RGB(0, 255, 0)), 0.7152, places=4)
+
+    def test_is_dark_is_complement_of_is_light(self):
+        for c in (RGB(0, 0, 0), RGB(255, 255, 255), RGB(40, 42, 54), RGB(253, 246, 227)):
+            self.assertEqual(is_dark(c), not is_light(c))
+
+    def test_half_boundary(self):
+        # Gray luminance == g/255: 128 -> 0.502 (light), 127 -> 0.498 (dark).
+        self.assertTrue(is_light(RGB(128, 128, 128)))
+        self.assertTrue(is_dark(RGB(127, 127, 127)))
 
     def test_best_text_on(self):
         self.assertEqual(best_text_on(RGB(255, 255, 255)), RGB(0, 0, 0))

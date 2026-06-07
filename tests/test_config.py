@@ -26,28 +26,40 @@ class TomlWriterTests(unittest.TestCase):
 class StateRoundTripTests(unittest.TestCase):
     def test_to_toml_is_valid_and_round_trips(self):
         state = State(
-            selected="Solarized Dark",
+            selected="light:GitHub Light,dark:Dracula",
+            scheme="dark",
             pool=["Dracula", "Nord", "Solarized Dark"],
             excluded=["Faded Mono"],
             favorites=["Dracula"],
-            filters=Filters(exclude_light=True, min_contrast=4.5),
+            ranking_light=["GitHub Light"],
+            ranking_dark=["Dracula", "Nord"],
+            filters=Filters(min_contrast=4.5),
             comparisons=[("Dracula", "Nord"), ("Solarized Dark", "Nord")],
         )
         text = state.to_toml()
         data = tomllib.loads(text)  # must parse
-        self.assertEqual(data["selected"], "Solarized Dark")
+        self.assertEqual(data["selected"], "light:GitHub Light,dark:Dracula")
+        self.assertEqual(data["scheme"], "dark")
         self.assertEqual(data["filters"]["min_contrast"], 4.5)
-        self.assertTrue(data["filters"]["exclude_light"])
         self.assertEqual(len(data["comparison"]), 2)
 
         restored = State.from_dict(data)
         self.assertEqual(restored.selected, state.selected)
+        self.assertEqual(restored.scheme, "dark")
         self.assertEqual(restored.pool, state.pool)
         self.assertEqual(restored.excluded, state.excluded)
         self.assertEqual(restored.favorites, state.favorites)
+        self.assertEqual(restored.ranking_light, ["GitHub Light"])
+        self.assertEqual(restored.ranking_dark, ["Dracula", "Nord"])
         self.assertEqual(restored.comparisons, state.comparisons)
-        self.assertEqual(restored.filters.exclude_light, True)
         self.assertEqual(restored.filters.min_contrast, 4.5)
+
+    def test_back_compat_old_exclude_filters(self):
+        # Old configs used exclude_light/exclude_dark; map them onto scheme.
+        data = {"version": 1, "filters": {"exclude_light": True}}
+        self.assertEqual(State.from_dict(data).scheme, "dark")
+        data = {"version": 1, "filters": {"exclude_dark": True}}
+        self.assertEqual(State.from_dict(data).scheme, "light")
 
     def test_save_and_load(self):
         with TemporaryDirectory() as tmp:
@@ -81,12 +93,32 @@ class ActiveThemesTests(unittest.TestCase):
         active = state.active_themes(self.available)
         self.assertEqual(set(active), {"Dracula", "Nord"})
 
-    def test_filter_excludes_light(self):
-        state = State(filters=Filters(exclude_light=True))
+    def test_scheme_dark_only(self):
+        state = State(scheme="dark")
         active = state.active_themes(self.available)
         self.assertNotIn("Solarized Light", active)
         self.assertNotIn("GitHub Light", active)
         self.assertIn("Dracula", active)
+
+    def test_scheme_light_only(self):
+        state = State(scheme="light")
+        active = state.active_themes(self.available)
+        self.assertIn("Solarized Light", active)
+        self.assertIn("GitHub Light", active)
+        self.assertNotIn("Dracula", active)
+
+    def test_considered_includes_both_schemes(self):
+        # 'considered' ignores scheme, so both leaderboards persist.
+        state = State(scheme="dark")
+        considered = state.considered_themes(self.available)
+        self.assertIn("GitHub Light", considered)
+        self.assertIn("Dracula", considered)
+
+    def test_active_groups_partition(self):
+        groups = State(scheme="all").active_groups(self.available)
+        self.assertIn("Dracula", groups["dark"])
+        self.assertIn("GitHub Light", groups["light"])
+        self.assertNotIn("GitHub Light", groups["dark"])
 
     def test_filter_min_contrast(self):
         state = State(filters=Filters(min_contrast=2.0))
@@ -105,11 +137,18 @@ class ActiveThemesTests(unittest.TestCase):
         self.assertIn("Dracula", state.excluded)
         self.assertNotIn("Dracula", state.favorites)
 
-    def test_recompute_ranking(self):
-        state = State(comparisons=[("Dracula", "Nord")])
-        ranked = state.recompute_ranking(self.available)
-        self.assertEqual(ranked[0], "Dracula")
-        self.assertEqual(state.ranking, ranked)
+    def test_recompute_rankings_separates_groups(self):
+        state = State(
+            comparisons=[("Dracula", "Nord"), ("GitHub Light", "Solarized Light")]
+        )
+        light, dark = state.recompute_rankings(self.available)
+        # Dark winner is a dark theme; light winner is a light theme.
+        self.assertEqual(dark[0], "Dracula")
+        self.assertEqual(light[0], "GitHub Light")
+        self.assertNotIn("Dracula", light)
+        self.assertNotIn("GitHub Light", dark)
+        self.assertEqual(state.top_dark(), "Dracula")
+        self.assertEqual(state.top_light(), "GitHub Light")
 
 
 if __name__ == "__main__":

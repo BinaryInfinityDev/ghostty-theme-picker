@@ -22,18 +22,25 @@ It also works with light themes:
   window (shell prompt, syntax-highlighted code, the full 16-color ANSI bar, a
   text selection sample and a block cursor) using the theme's exact colors —
   24-bit when your terminal supports it, with an automatic 256-color fallback.
-- **Full round-robin.** Every pair of non-excluded themes is presented exactly
-  once. Progress is saved continuously, so you can stop and resume anytime.
+- **Separate light & dark leaderboards.** Themes are classified light/dark with
+  Ghostty's own logic, and only ever compared within their group (light vs
+  light, dark vs dark). You get two independent ranked lists — exactly what you
+  need for Ghostty's combined `light:…,dark:…` theme assignment.
+- **Pick a scheme.** Compare both groups, or restrict a session to just light or
+  just dark with `--scheme` (or from the in-app menu).
+- **Full round-robin.** Every within-group pair of non-excluded themes is
+  presented exactly once. Progress is saved continuously — stop and resume
+  anytime.
 - **Veto bad themes fast.** Press `x` to remove a theme you'd never use; it
   drops out of *all* its remaining matchups, shrinking the tournament.
-- **Property filters.** Prune the pool up front: exclude light themes, exclude
-  dark themes, or require a minimum text/background contrast ratio.
+- **Minimum-contrast filter.** Prune unreadable themes by requiring a minimum
+  text/background contrast ratio.
 - **Favorites & finals.** Star themes as you go, then run a decisive **finals**
-  round-robin among just your favorites.
+  round-robin among just your favorites (still within each group).
 - **Ranked results.** Standings are computed with a Copeland-style win count
   (ordered by win rate so partial progress still makes sense).
-- **Apply to Ghostty.** Set the winner as your Ghostty theme with one keystroke;
-  the previous config is backed up first.
+- **Apply to Ghostty.** Write a combined `light:…,dark:…` assignment by default,
+  or just one group — the previous config is backed up first.
 - **Start from a subset.** Begin from all installed themes, or from a curated
   list in a config file.
 - **Zero dependencies.** Pure Python standard library, Python 3.11+.
@@ -70,18 +77,36 @@ ghostty-theme-picker compare --themes-dir ./sample-themes
 | `x` | Veto a theme (then pick a side) — drops all its remaining matchups |
 | `f` | Favorite a theme (then pick a side) — candidate for the finals |
 | `u` | Undo the last action |
-| `m` / `Esc` | Open the menu (ranking, finals, filters, apply, save, quit) |
+| `m` / `Esc` | Open the menu (leaderboards, finals, scheme & filters, apply, save, quit) |
 | `?` | Help |
 | `Ctrl-C` | Quit (everything is saved as you go) |
 
-From the menu you can view the live **ranking**, run the **finals** among your
-favorites, adjust **filters**, or **apply** a theme to your Ghostty config.
+From the menu you can view the live **leaderboards** (light and dark), run the
+**finals** among your favorites, change the **scheme & filters**, or **apply**
+theme(s) to your Ghostty config.
+
+## Light vs dark
+
+Themes are classified using **Ghostty's own logic** — the relative luminance of
+the background (`0.2126·R + 0.7152·G + 0.0722·B`, normalized) is below `0.5` for
+dark themes — the same rule Ghostty's `+list-themes` uses. The tool keeps two
+independent leaderboards and only ever compares **light against light** and
+**dark against dark**, so a "dark" theme never has to compete with a "light"
+one. Use `--scheme` (or the in-app **Scheme & filters** menu) to compare both
+groups or restrict to one:
+
+```bash
+ghostty-theme-picker compare --scheme dark    # only dark themes
+ghostty-theme-picker compare --scheme light   # only light themes
+ghostty-theme-picker compare --scheme all     # both (the default)
+```
 
 ## Other commands
 
 ```bash
-# Print the current ranking (non-interactive):
+# Print the leaderboards (light and dark; non-interactive):
 ghostty-theme-picker rank
+ghostty-theme-picker rank --scheme dark        # just the dark leaderboard
 
 # List discovered themes, optionally with light/dark + contrast:
 ghostty-theme-picker list-themes --details
@@ -89,12 +114,29 @@ ghostty-theme-picker list-themes --details
 # Print a single theme preview to stdout:
 ghostty-theme-picker preview "Tokyo Night"
 
-# Set a theme in your Ghostty config (defaults to the top-ranked theme):
-ghostty-theme-picker apply "Tokyo Night"
-ghostty-theme-picker apply            # applies your #1 ranked / selected theme
-
 # Show resolved paths and counts:
 ghostty-theme-picker info
+```
+
+### Applying theme(s) to Ghostty
+
+By default `apply` writes Ghostty's **combined** assignment using the top theme
+from each leaderboard, so Ghostty can switch automatically with your OS
+appearance:
+
+```bash
+# theme = light:<top light>,dark:<top dark>
+ghostty-theme-picker apply
+
+# Apply just one group:
+ghostty-theme-picker apply --only-dark
+ghostty-theme-picker apply --only-light
+
+# Override either side (anything omitted uses the auto pick):
+ghostty-theme-picker apply --light "Solarized Light" --dark "Tokyo Night"
+
+# Or apply one exact theme as a single value:
+ghostty-theme-picker apply "Tokyo Night"
 ```
 
 ### Starting from a subset
@@ -108,14 +150,16 @@ ghostty-theme-picker compare --pool-file my-shortlist.txt
 ```
 
 You can also point `--config` at any saved session file; its `pool` and
-`excluded` lists define the starting set.
+`excluded` lists define the starting set, and its `scheme` the light/dark
+restriction.
 
 ## Where things live
 
 - **Picker state / results:** `$XDG_CONFIG_HOME/ghostty-theme-picker/picker.toml`
-  (override with `--config`). This is the deliverable: it stores the ranked
-  list, the themes you excluded, your favorites, the filters, the recorded
-  comparisons (so sessions resume), and your selected theme.
+  (override with `--config`). This is the deliverable: it stores the two ranked
+  lists (`ranking_light`, `ranking_dark`), the themes you excluded, your
+  favorites, the scheme and filters, the recorded comparisons (so sessions
+  resume), and your selected assignment.
 - **Ghostty config:** auto-detected at `$XDG_CONFIG_HOME/ghostty/config`
   (and the macOS Application Support location). Override with
   `--ghostty-config`.
@@ -127,14 +171,14 @@ You can also point `--config` at any saved session file; its `pool` and
 
 ```toml
 version = 1
-selected = "Tokyo Night"
+selected = "light:GitHub Light,dark:Tokyo Night"
+scheme = "all"
 excluded = ["Faded Mono"]
 favorites = ["Dracula", "Tokyo Night"]
-ranking = ["Tokyo Night", "Dracula", "Nord", "Gruvbox Dark"]
+ranking_light = ["GitHub Light", "Solarized Light"]
+ranking_dark = ["Tokyo Night", "Dracula", "Nord", "Gruvbox Dark"]
 
 [filters]
-exclude_light = true
-exclude_dark = false
 min_contrast = 4.5
 
 [[comparison]]
@@ -144,17 +188,18 @@ loser = "Nord"
 
 ## How ranking works
 
-Each decision is recorded as a `(winner, loser)` pair. Themes are ordered by
-**win rate**, then total wins, then fewest losses. For a *completed*
-round-robin (where every theme plays the same number of games) this is exactly
-a Copeland win count; mid-tournament, win rate keeps partial standings
-sensible. Vetoing a theme removes it — and all comparisons involving it — from
-the ranking entirely.
+Each decision is recorded as a `(winner, loser)` pair. Within each group
+(light, dark) themes are ordered by **win rate**, then total wins, then fewest
+losses. For a *completed* round-robin (where every theme plays the same number
+of games) this is exactly a Copeland win count; mid-tournament, win rate keeps
+partial standings sensible. Because comparisons never cross groups, the two
+leaderboards are fully independent. Vetoing a theme removes it — and all
+comparisons involving it — from its leaderboard entirely.
 
-The total number of matchups is `n·(n−1)/2`, which grows quickly: ~45,000 for
-300 themes. Vetoing themes you'd never use and applying property filters are
-the fastest ways to get to a finishable size; the progress bar shows how many
-matchups remain and how many each veto would remove.
+The number of matchups in a group of `n` themes is `n·(n−1)/2`, which grows
+quickly. Restricting to one scheme, vetoing themes you'd never use, and the
+minimum-contrast filter are the fastest ways to get to a finishable size; the
+progress bar shows how many matchups remain and how many each veto would remove.
 
 ## Development
 

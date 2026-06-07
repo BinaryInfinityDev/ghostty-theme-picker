@@ -23,7 +23,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .color import RGB, contrast_ratio, is_light, parse_color
+from .color import RGB, contrast_ratio, is_dark, is_light, parse_color
 
 # Keys we care about, mapped onto Theme attributes.
 _SIMPLE_KEYS = {
@@ -95,6 +95,15 @@ class Theme:
     @property
     def is_light(self) -> bool:
         return is_light(self.background)
+
+    @property
+    def is_dark(self) -> bool:
+        return is_dark(self.background)
+
+    @property
+    def scheme(self) -> str:
+        """Either ``"light"`` or ``"dark"``, per Ghostty's classification."""
+        return "light" if self.is_light else "dark"
 
     @property
     def contrast(self) -> float:

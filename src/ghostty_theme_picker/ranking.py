@@ -81,6 +81,36 @@ def total_pairs(active: list[str]) -> int:
     return n * (n - 1) // 2
 
 
+def remaining_pairs_in_groups(
+    groups: dict[str, list[str]], comparisons: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Remaining matchups within each group, interleaved across groups.
+
+    Each group is paired only against itself (never cross-group), and the
+    groups' remaining pairs are interleaved round-robin so a mixed session
+    alternates between, say, dark and light matchups rather than finishing one
+    group before starting the other.
+    """
+    per_group = [remaining_pairs(members, comparisons) for members in groups.values()]
+    out: list[tuple[str, str]] = []
+    longest = max((len(p) for p in per_group), default=0)
+    for i in range(longest):
+        for pairs in per_group:
+            if i < len(pairs):
+                out.append(pairs[i])
+    return out
+
+
+def total_pairs_in_groups(groups: dict[str, list[str]]) -> int:
+    return sum(total_pairs(members) for members in groups.values())
+
+
+def completed_pairs_in_groups(
+    groups: dict[str, list[str]], comparisons: list[tuple[str, str]]
+) -> int:
+    return sum(completed_pairs(members, comparisons) for members in groups.values())
+
+
 def completed_pairs(active: list[str], comparisons: list[tuple[str, str]]) -> int:
     """How many of the active matchups already have a verdict."""
     active_set = set(active)

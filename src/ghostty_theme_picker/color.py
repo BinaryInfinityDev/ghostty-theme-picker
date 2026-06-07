@@ -120,16 +120,36 @@ def contrast_ratio(a: RGB, b: RGB) -> float:
 
 
 def perceived_brightness(color: RGB) -> float:
-    """Perceived brightness in [0, 1] using the classic ITU-R weighting.
+    """Perceived brightness in [0, 1] using the classic ITU-R / AERT weighting.
 
-    This tracks human perception of "is this light or dark" better than raw
-    luminance for the purpose of classifying a background.
+    Ghostty calls this ``perceivedLuminance``. We use it only for picking
+    legible label text, not for light/dark theme classification.
     """
     return (0.299 * color.r + 0.587 * color.g + 0.114 * color.b) / 255.0
 
 
+def ghostty_luminance(color: RGB) -> float:
+    """Relative luminance exactly as Ghostty uses it to classify themes.
+
+    Ghostty's ``shouldIncludeTheme`` (src/cli/list_themes.zig) applies the WCAG
+    luminance coefficients directly to the normalized sRGB channels -- without
+    the per-channel gamma correction used for contrast -- and treats a theme as
+    dark when this value is below 0.5::
+
+        luminance = 0.2126*(r/255) + 0.7152*(g/255) + 0.0722*(b/255)
+        is_dark   = luminance < 0.5
+    """
+    return 0.2126 * (color.r / 255) + 0.7152 * (color.g / 255) + 0.0722 * (color.b / 255)
+
+
+def is_dark(color: RGB) -> bool:
+    """Whether Ghostty would classify this background as a dark theme."""
+    return ghostty_luminance(color) < 0.5
+
+
 def is_light(color: RGB) -> bool:
-    return perceived_brightness(color) > 0.5
+    """Whether Ghostty would classify this background as a light theme."""
+    return not is_dark(color)
 
 
 def best_text_on(background: RGB) -> RGB:

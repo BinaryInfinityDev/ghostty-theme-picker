@@ -65,10 +65,26 @@ class AppLogicTests(unittest.TestCase):
             app.undo()
             self.assertNotIn("Dracula", app.state.favorites)
 
-    def test_pool_for_finals_uses_favorites(self):
+    def test_groups_for_finals_uses_favorites(self):
         with TemporaryDirectory() as tmp:
             app, _ = self.make_app(tmp, State(favorites=["Dracula", "Nord"]))
-            self.assertEqual(set(app._pool_for(finals=True)), {"Dracula", "Nord"})
+            groups = app._groups_for(finals=True)
+            self.assertEqual(set(groups["dark"]), {"Dracula", "Nord"})
+            self.assertEqual(groups["light"], [])
+
+    def test_comparisons_are_within_scheme(self):
+        from ghostty_theme_picker import ranking
+
+        with TemporaryDirectory() as tmp:
+            app, _ = self.make_app(tmp)  # scheme defaults to "all"
+            groups = app.state.active_groups(app.available)
+            queue = ranking.remaining_pairs_in_groups(groups, app.state.comparisons)
+            self.assertTrue(queue)  # there are matchups to do
+            for a, b in queue:
+                self.assertEqual(
+                    app.available[a].scheme, app.available[b].scheme,
+                    f"cross-scheme pair: {a} vs {b}",
+                )
 
     def test_swatch_renders(self):
         with TemporaryDirectory() as tmp:

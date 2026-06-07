@@ -73,7 +73,10 @@ def cmd_compare(args) -> int:
     state = State() if args.reset_all else load_state(config_path)
     if args.reset:
         state.comparisons = []
-        state.ranking = []
+        state.ranking_light = []
+        state.ranking_dark = []
+    if args.scheme:
+        state.scheme = args.scheme
 
     available = _load_themes(args)
     _require_themes(available)
@@ -101,25 +104,17 @@ def cmd_compare(args) -> int:
     app = App(state, available, config_path, painter, gpath)
     app.run()
 
-    ranked = state.ranking
-    if ranked:
-        print(f"Top theme: {ranked[0]}")
+    state.recompute_rankings(available)
+    if state.top_light():
+        print(f"Top light: {state.top_light()}")
+    if state.top_dark():
+        print(f"Top dark:  {state.top_dark()}")
     print(f"Saved progress to {config_path}")
     return 0
 
 
-def cmd_rank(args) -> int:
-    config_path = Path(args.config).expanduser() if args.config else default_config_path()
-    state = load_state(config_path)
-    available = _load_themes(args)
-    active = state.active_themes(available) if available else (
-        state.pool or sorted({n for c in state.comparisons for n in c})
-    )
-    rows = compute_ranking(active, state.comparisons)
-    if not rows:
-        print("No ranking yet. Run 'compare' first.")
-        return 0
-    favs = set(state.favorites)
+def _print_board(rows, favorites) -> None:
+    favs = set(favorites)
     width = max((len(r.name) for r in rows), default=4)
     for i, row in enumerate(rows, start=1):
         star = "*" if row.name in favs else " "
@@ -127,6 +122,42 @@ def cmd_rank(args) -> int:
             f"{i:>3}. {star} {row.name:<{width}}  "
             f"{row.wins:>3}-{row.losses:<3}  {row.win_rate * 100:>5.1f}%"
         )
+
+
+def cmd_rank(args) -> int:
+    config_path = Path(args.config).expanduser() if args.config else default_config_path()
+    state = load_state(config_path)
+    available = _load_themes(args)
+    scheme = getattr(args, "scheme", None) or "all"
+
+    if not available:
+        # Offline fallback: we can't classify light/dark without theme files,
+        # so print a single ungrouped board from the recorded comparisons.
+        names = state.pool or sorted({n for c in state.comparisons for n in c})
+        rows = compute_ranking(names, state.comparisons)
+        if not rows:
+            print("No ranking yet. Run 'compare' first.")
+            return 0
+        sys.stderr.write(
+            "(theme files not found; cannot separate light/dark leaderboards)\n"
+        )
+        _print_board(rows, state.favorites)
+        return 0
+
+    considered = state.considered_groups(available)
+    groups = ["light", "dark"] if scheme == "all" else [scheme]
+    printed = False
+    for group in groups:
+        rows = compute_ranking(considered[group], state.comparisons)
+        if not rows:
+            continue
+        if printed:
+            print()
+        print(f"== {group.capitalize()} themes ==")
+        _print_board(rows, state.favorites)
+        printed = True
+    if not printed:
+        print("No ranking yet. Run 'compare' first.")
     if state.excluded:
         print("\nExcluded: " + ", ".join(state.excluded))
     return 0
@@ -165,30 +196,75 @@ def cmd_preview(args) -> int:
     return 0
 
 
+def _warn_unknown(available: dict, name: str) -> None:
+    if available and name not in available:
+        sys.stderr.write(
+            f"Warning: '{name}' is not among discovered themes; applying anyway.\n"
+        )
+
+
+def _warn_scheme(available: dict, name: str, expected: str) -> None:
+    if available and name in available and available[name].scheme != expected:
+        sys.stderr.write(
+            f"Warning: '{name}' is a {available[name].scheme} theme but is being "
+            f"used as the {expected} theme.\n"
+        )
+
+
 def cmd_apply(args) -> int:
     config_path = Path(args.config).expanduser() if args.config else default_config_path()
     state = load_state(config_path)
     available = _load_themes(args)
+    if available:
+        state.recompute_rankings(available)
 
-    target = args.theme
-    if target is None:
-        target = state.selected
-    if target is None:
-        active = state.active_themes(available) if available else None
-        ranked = compute_ranking(active, state.comparisons) if active else []
-        if ranked:
-            target = ranked[0].name
-    if target is None:
-        sys.stderr.write(
-            "No theme specified and no ranking/selection available.\n"
-            "Pass a theme name: ghostty-theme-picker apply 'Theme Name'\n"
-        )
+    if args.only_light and args.only_dark:
+        sys.stderr.write("Use only one of --only-light / --only-dark.\n")
         return 2
 
-    if available and target not in available:
+    value: str | None = None
+
+    if args.theme:
+        # An explicit positional theme overrides everything else.
+        if args.light or args.dark or args.only_light or args.only_dark:
+            sys.stderr.write(
+                "Note: positional theme given; ignoring --light/--dark/--only-*.\n"
+            )
+        value = args.theme
+        _warn_unknown(available, value)
+    else:
+        light = args.light or state.top_light()
+        dark = args.dark or state.top_dark()
+        if args.light:
+            _warn_unknown(available, args.light)
+            _warn_scheme(available, args.light, "light")
+        if args.dark:
+            _warn_unknown(available, args.dark)
+            _warn_scheme(available, args.dark, "dark")
+
+        if args.only_light:
+            value = light
+            if value is None:
+                sys.stderr.write("No light theme available to apply.\n")
+                return 2
+        elif args.only_dark:
+            value = dark
+            if value is None:
+                sys.stderr.write("No dark theme available to apply.\n")
+                return 2
+        elif light and dark:
+            value = f"light:{light},dark:{dark}"  # Ghostty combined assignment
+        elif light or dark:
+            value = light or dark
+        else:
+            value = state.selected
+
+    if value is None:
         sys.stderr.write(
-            f"Warning: '{target}' is not among discovered themes; applying anyway.\n"
+            "Nothing to apply: no theme specified and no ranking/selection yet.\n"
+            "Pass a theme name, or run 'compare' first.\n"
         )
+        return 2
 
     gpath = ghostty_config.find_config_path(args.ghostty_config)
     if not gpath.exists() and not args.create:
@@ -199,15 +275,15 @@ def cmd_apply(args) -> int:
         return 2
 
     result = ghostty_config.apply_theme(
-        target, gpath, create=args.create, backup=not args.no_backup
+        value, gpath, create=args.create, backup=not args.no_backup
     )
-    state.selected = target
+    state.selected = value
     save_state(config_path, state)
 
     verb = "Created" if result.created else ("Updated" if result.replaced else "Added")
     print(f"{verb} theme = {result.theme}")
     print(f"  in {result.path}")
-    if result.previous and result.previous != target:
+    if result.previous and result.previous != value:
         print(f"  (was: {result.previous})")
     if result.backup:
         print(f"  backup: {result.backup}")
@@ -223,8 +299,12 @@ def cmd_info(args) -> int:
     print(f"Themes dir:      {find_themes_dir(args.themes_dir)}")
     print(f"Ghostty config:  {ghostty_config.find_config_path(args.ghostty_config)}")
     print(f"Color mode:      {_resolve_color_mode(args.color)}")
+    print(f"Scheme:          {state.scheme}")
     print(f"Themes found:    {len(available)}")
     if available:
+        considered = state.considered_groups(available)
+        print(f"Light themes:    {len(considered['light'])}")
+        print(f"Dark themes:     {len(considered['dark'])}")
         print(f"Active (in play):{len(state.active_themes(available)):>4}")
     print(f"Comparisons:     {len(state.comparisons)}")
     print(f"Excluded:        {len(state.excluded)}")
@@ -268,14 +348,26 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p_cmp, color=True, ghostty=True)
     p_cmp.add_argument("--pool", help="Comma-separated subset of themes to consider.")
     p_cmp.add_argument("--pool-file", help="File with one theme name per line.")
+    p_cmp.add_argument(
+        "--scheme",
+        choices=("all", "light", "dark"),
+        default=None,
+        help="Limit comparisons to light themes, dark themes, or all (default: keep saved).",
+    )
     p_cmp.add_argument("--reset", action="store_true", help="Clear comparison progress.")
     p_cmp.add_argument(
         "--reset-all", action="store_true", help="Start completely fresh."
     )
     p_cmp.set_defaults(func=cmd_compare)
 
-    p_rank = sub.add_parser("rank", help="Print the current ranking.")
+    p_rank = sub.add_parser("rank", help="Print the light and dark leaderboards.")
     _add_common(p_rank, color=False)
+    p_rank.add_argument(
+        "--scheme",
+        choices=("all", "light", "dark"),
+        default="all",
+        help="Which leaderboard(s) to print (default: all).",
+    )
     p_rank.set_defaults(func=cmd_rank)
 
     p_list = sub.add_parser("list-themes", help="List discovered themes.")
@@ -292,10 +384,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_prev.add_argument("--height", type=int, default=18, help="Preview height.")
     p_prev.set_defaults(func=cmd_preview)
 
-    p_apply = sub.add_parser("apply", help="Set the theme in the Ghostty config.")
+    p_apply = sub.add_parser(
+        "apply",
+        help="Set the theme in the Ghostty config (combined light/dark by default).",
+    )
     _add_common(p_apply, color=False, ghostty=True)
     p_apply.add_argument(
-        "theme", nargs="?", help="Theme to apply (default: top-ranked/selected)."
+        "theme",
+        nargs="?",
+        help="Apply this exact theme as a single value (overrides the options below).",
+    )
+    p_apply.add_argument(
+        "--light", help="Light theme for the combined assignment (default: top light)."
+    )
+    p_apply.add_argument(
+        "--dark", help="Dark theme for the combined assignment (default: top dark)."
+    )
+    p_apply.add_argument(
+        "--only-light",
+        "--onlyLight",
+        dest="only_light",
+        action="store_true",
+        help="Apply only the light theme (single value).",
+    )
+    p_apply.add_argument(
+        "--only-dark",
+        "--onlyDark",
+        dest="only_dark",
+        action="store_true",
+        help="Apply only the dark theme (single value).",
     )
     p_apply.add_argument(
         "--create", action="store_true", help="Create the config file if missing."

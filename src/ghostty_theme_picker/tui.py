@@ -81,7 +81,7 @@ class App:
     # -- persistence --------------------------------------------------------
 
     def save(self) -> None:
-        self.state.recompute_ranking(self.available)
+        self.state.recompute_rankings(self.available)
         save_state(self.config_path, self.state)
 
     # -- undoable operations ------------------------------------------------
@@ -147,23 +147,36 @@ class App:
 
     # -- comparison loop ----------------------------------------------------
 
-    def _pool_for(self, finals: bool) -> list[str]:
+    def _groups_for(self, finals: bool) -> dict[str, list[str]]:
+        """Return ``{"light": [...], "dark": [...]}`` for the current context.
+
+        Comparisons only ever happen within a group. ``scheme`` restricts which
+        group(s) are in play; finals are scoped to the favorites (still split by
+        group and restricted to the active scheme).
+        """
         if finals:
-            return [n for n in self.state.favorites if n in self.available]
-        return self.state.active_themes(self.available)
+            groups: dict[str, list[str]] = {"light": [], "dark": []}
+            for name in self.state.favorites:
+                if name not in self.available:
+                    continue
+                scheme = self.available[name].scheme
+                if self.state.scheme in ("all", scheme):
+                    groups[scheme].append(name)
+            return groups
+        return self.state.active_groups(self.available)
 
     def compare_loop(self, finals: bool) -> None:
         while True:
-            pool = self._pool_for(finals)
-            if finals and len(pool) < 2:
+            groups = self._groups_for(finals)
+            if finals and all(len(m) < 2 for m in groups.values()):
                 self.notice(
-                    "Finals need at least two favorites.",
+                    "Finals need at least two favorites in a scheme group.",
                     "Mark favorites with 'f' during comparison, then try again.",
                 )
                 return
-            # Finals is the same round-robin, scoped to your favorites: it asks
-            # the favorite matchups that haven't been decided yet, then ends.
-            queue = ranking.remaining_pairs(pool, self.state.comparisons)
+            # Finals is the same within-group round-robin, scoped to favorites:
+            # it asks the favorite matchups not yet decided, then ends.
+            queue = ranking.remaining_pairs_in_groups(groups, self.state.comparisons)
 
             if not queue:
                 if self.show_done_screen(finals) == "quit":
@@ -262,10 +275,11 @@ class App:
             )
             return
 
-        pool = self._pool_for(finals)
-        total = ranking.total_pairs(pool)
-        done = ranking.completed_pairs(pool, self.state.comparisons)
+        groups = self._groups_for(finals)
+        total = ranking.total_pairs_in_groups(groups)
+        done = ranking.completed_pairs_in_groups(groups, self.state.comparisons)
         remaining = max(0, total - done)
+        group = self.available[a].scheme  # both sides share a scheme
 
         gutter = 2
         margin = 1
@@ -283,7 +297,10 @@ class App:
         lines: list[str] = []
 
         # Header.
-        mode = "FINALS — your favorites" if finals else "Which theme do you prefer?"
+        if finals:
+            mode = f"FINALS — your {group} favorites"
+        else:
+            mode = f"Which {group} theme do you prefer?"
         lines.append(self._center(f"{BOLD}{mode}{RESET}", size.cols))
         a_lbl = f"{BOLD}◀ A{RESET}  press ← or h"
         b_lbl = f"press → or l  {BOLD}B ▶{RESET}"
@@ -310,7 +327,8 @@ class App:
         rem_b = sum(1 for x, y in queue if b in (x, y))
         tip = (
             f"{DIM}veto A drops {rem_a} matchups · veto B drops {rem_b} · "
-            f"favorites: {len(self.state.favorites)} · vetoed: {len(self.state.excluded)}{RESET}"
+            f"scheme: {self.state.scheme} · favorites: {len(self.state.favorites)} · "
+            f"vetoed: {len(self.state.excluded)}{RESET}"
         )
         lines.append(self._clip(tip, size.cols))
         legend = (
@@ -354,8 +372,8 @@ class App:
             ("r", "Resume comparisons"),
             ("v", "View ranking"),
             ("F", f"Run finals among favorites ({len(self.state.favorites)})"),
-            ("t", "Filters (light/dark/contrast)"),
-            ("a", "Apply a theme to Ghostty config"),
+            ("t", "Scheme & filters (light/dark/contrast)"),
+            ("a", "Apply theme(s) to Ghostty config"),
             ("s", "Save now"),
             ("q", "Quit (saves automatically)"),
         ]
@@ -386,45 +404,71 @@ class App:
     # -- ranking screen -----------------------------------------------------
 
     def ranking_screen(self) -> None:
-        top = 0
-        cursor = 0
+        cursor = 0  # index into the selectable rows
+        top = 0  # first display item shown
         while True:
-            rows = ranking.compute_ranking(
-                self.state.active_themes(self.available), self.state.comparisons
+            self.state.recompute_rankings(self.available)
+            considered = self.state.considered_groups(self.available)
+            show = (
+                ["light", "dark"]
+                if self.state.scheme == "all"
+                else [self.state.scheme]
             )
-            size = get_size()
-            view_h = max(3, size.rows - 6)
-            if not rows:
+            # Build a flat display list of headers and rows.
+            items: list[tuple[str, object]] = []
+            selectable: list[int] = []
+            for group in show:
+                rows = ranking.compute_ranking(
+                    considered[group], self.state.comparisons
+                )
+                if not rows:
+                    continue
+                items.append(("header", group))
+                for i, row in enumerate(rows):
+                    selectable.append(len(items))
+                    items.append(("row", (i + 1, row)))
+            if not selectable:
                 self.notice("No themes to rank yet.", "Compare some themes first.")
                 return
-            cursor = max(0, min(cursor, len(rows) - 1))
-            if cursor < top:
-                top = cursor
-            elif cursor >= top + view_h:
-                top = cursor - view_h + 1
 
-            lines = [self._center(f"{BOLD}Ranking{RESET}", size.cols), ""]
-            for i in range(top, min(top + view_h, len(rows))):
-                row = rows[i]
+            cursor = max(0, min(cursor, len(selectable) - 1))
+            size = get_size()
+            view_h = max(3, size.rows - 4)
+            cur_item = selectable[cursor]
+            if cur_item < top:
+                top = cur_item
+            elif cur_item >= top + view_h:
+                top = cur_item - view_h + 1
+            top = max(0, min(top, max(0, len(items) - view_h)))
+
+            lines = [self._center(f"{BOLD}Leaderboards{RESET}", size.cols)]
+            for idx in range(top, min(top + view_h, len(items))):
+                kind, payload = items[idx]
+                if kind == "header":
+                    label = "Light themes" if payload == "light" else "Dark themes"
+                    lines.append(f"{BOLD}── {label} ──{RESET}")
+                    continue
+                rank_no, row = payload  # type: ignore[misc]
                 star = "★" if row.name in self.state.favorites else " "
                 swatch = self._swatch(self.available[row.name])
                 text = (
-                    f"{i + 1:>3}. {star} {row.name:<28.28}  "
+                    f"{rank_no:>3}. {star} {row.name:<24.24}  "
                     f"{row.wins}-{row.losses}  {row.win_rate * 100:>4.0f}%  {swatch}"
                 )
                 text = self._clip(text, size.cols - 1)
-                if i == cursor:
+                if idx == cur_item:
                     lines.append(f"{REVERSE}{self._ljust(text, size.cols - 1)}{RESET}")
                 else:
                     lines.append(text)
-            while len(lines) < size.rows - 3:
+            while len(lines) < size.rows - 2:
                 lines.append("")
-            lines.append("")
             lines.append(
-                f"{DIM}↑/↓ move · Enter apply · x veto · "
-                f"Home/End · Esc back{RESET}"
+                f"{DIM}↑/↓ move · Enter apply · x veto · Home/End · Esc back{RESET}"
             )
             self.term.render("\n".join(lines))
+
+            def row_at(c: int):
+                return items[selectable[c]][1]
 
             key = self.term.read_key()
             if key in (KEY_ESC, "m", "q"):
@@ -440,11 +484,13 @@ class App:
             elif key == KEY_HOME:
                 cursor = 0
             elif key == KEY_END:
-                cursor = len(rows) - 1
+                cursor = len(selectable) - 1
             elif key == "x":
-                self.do_exclude(rows[cursor].name)
+                _, row = row_at(cursor)
+                self.do_exclude(row.name)  # list refreshes next iteration
             elif key in (KEY_ENTER, "a"):
-                self.apply_screen(preselect=rows[cursor].name)
+                _, row = row_at(cursor)
+                self.apply_screen(preselect=row.name)
             elif key == KEY_CTRL_C:
                 raise QuitApp()
 
@@ -459,25 +505,30 @@ class App:
 
     def filters_screen(self) -> bool:
         f = self.state.filters
-        before = (f.exclude_light, f.exclude_dark, f.min_contrast)
+        before = (self.state.scheme, f.min_contrast)
         while True:
+            considered = self.state.considered_groups(self.available)
             active = len(self.state.active_themes(self.available))
             body = [
-                f"[l]  Exclude light themes      {'[x]' if f.exclude_light else '[ ]'}",
-                f"[d]  Exclude dark themes       {'[x]' if f.exclude_dark else '[ ]'}",
-                f"[+/-] Minimum contrast ratio   {f.min_contrast:.1f}:1",
-                f"[0]  Reset minimum contrast",
+                "Scheme — which themes to compare:",
+                f"   [a] all   [l] light   [d] dark      (now: {self.state.scheme})",
                 "",
-                f"Themes still in play: {active}",
+                f"[+/-] Minimum contrast ratio   {f.min_contrast:.1f}:1",
+                "[0]  Reset minimum contrast",
+                "",
+                f"Light: {len(considered['light'])}   Dark: {len(considered['dark'])}"
+                f"   In play now: {active}",
             ]
-            self._draw_box("Filters", body, footer="Esc when done.")
+            self._draw_box("Scheme & filters", body, footer="Esc when done.")
             key = self.term.read_key()
             if key in (KEY_ESC, "m", "q"):
                 break
-            if key == "l":
-                f.exclude_light = not f.exclude_light
+            if key == "a":
+                self.state.scheme = "all"
+            elif key == "l":
+                self.state.scheme = "light"
             elif key == "d":
-                f.exclude_dark = not f.exclude_dark
+                self.state.scheme = "dark"
             elif key in ("+", "=", KEY_RIGHT):
                 f.min_contrast = min(21.0, round(f.min_contrast + 0.5, 1))
             elif key in ("-", "_", KEY_LEFT):
@@ -487,49 +538,87 @@ class App:
             elif key == KEY_CTRL_C:
                 raise QuitApp()
         self.save()
-        return (f.exclude_light, f.exclude_dark, f.min_contrast) != before
+        return (self.state.scheme, f.min_contrast) != before
 
     # -- apply screen -------------------------------------------------------
 
-    def apply_screen(self, preselect: str | None = None) -> None:
-        ranked = self.state.recompute_ranking(self.available)
-        target = preselect or self.state.selected or (ranked[0] if ranked else None)
-        if target is None:
-            self.notice("No theme available to apply.", "")
+    def _apply_value(self, value: str) -> None:
+        """Write a theme value (single name or ``light:..,dark:..``) and report."""
+        try:
+            result = ghostty_config.apply_theme(value, self.ghostty_config_path)
+        except OSError as exc:
+            self.notice("Could not write config.", str(exc))
             return
+        self.state.selected = value
+        self.save()
+        detail = [f"Set theme = {result.theme}", f"in {result.path}"]
+        if result.created:
+            detail.append("(created a new config file)")
+        if result.backup:
+            detail.append(f"Backup: {result.backup.name}")
+        detail += ["", "Restart Ghostty or reload config to see it."]
+        self.notice("Applied!", "\n".join(detail))
+
+    def apply_screen(self, preselect: str | None = None) -> None:
+        # From the leaderboard: apply a single chosen theme.
+        if preselect is not None:
+            body = [
+                f"Apply theme:  {BOLD}{preselect}{RESET}",
+                "",
+                f"Ghostty config: {self.ghostty_config_path}",
+                "",
+                "Updates (or adds) the 'theme =' line and keeps a backup.",
+                "",
+                f"{BOLD}[y]{RESET} apply    {BOLD}[Esc]{RESET} cancel",
+            ]
+            self._draw_box("Apply to Ghostty", body)
+            while True:
+                key = self.term.read_key()
+                if key in ("y", "Y", KEY_ENTER):
+                    self._apply_value(preselect)
+                    return
+                if key in (KEY_ESC, "n", "N", "m", "q"):
+                    return
+                if key == KEY_CTRL_C:
+                    raise QuitApp()
+
+        # From the menu: offer Ghostty's combined light/dark assignment.
+        self.state.recompute_rankings(self.available)
+        light = self.state.top_light()
+        dark = self.state.top_dark()
+        combined = f"light:{light},dark:{dark}" if (light and dark) else None
+        default_value = combined or light or dark
+        if default_value is None:
+            self.notice("Nothing to apply yet.", "Compare some themes first.")
+            return
+
         body = [
-            f"Apply theme:  {BOLD}{target}{RESET}",
+            f"Light winner: {BOLD}{light or '(none)'}{RESET}",
+            f"Dark winner:  {BOLD}{dark or '(none)'}{RESET}",
             "",
             f"Ghostty config: {self.ghostty_config_path}",
             "",
-            "This updates (or adds) the 'theme =' line and keeps a backup.",
-            "",
-            f"{BOLD}[y]{RESET} apply    {BOLD}[Esc]{RESET} cancel",
         ]
+        if combined:
+            body.append(f"{BOLD}[y]{RESET} apply combined  →  theme = {combined}")
+        else:
+            body.append(f"{BOLD}[y]{RESET} apply  →  theme = {default_value}")
+        if light:
+            body.append(f"{BOLD}[l]{RESET} apply only light  ({light})")
+        if dark:
+            body.append(f"{BOLD}[d]{RESET} apply only dark   ({dark})")
+        body.append(f"{BOLD}[Esc]{RESET} cancel")
         self._draw_box("Apply to Ghostty", body)
         while True:
             key = self.term.read_key()
             if key in ("y", "Y", KEY_ENTER):
-                try:
-                    result = ghostty_config.apply_theme(
-                        target, self.ghostty_config_path
-                    )
-                except OSError as exc:
-                    self.notice("Could not write config.", str(exc))
-                    return
-                self.state.selected = target
-                self.save()
-                detail = [
-                    f"Set theme = {result.theme}",
-                    f"in {result.path}",
-                ]
-                if result.created:
-                    detail.append("(created a new config file)")
-                if result.backup:
-                    detail.append(f"Backup: {result.backup.name}")
-                detail.append("")
-                detail.append("Restart Ghostty or reload config to see it.")
-                self.notice("Applied!", "\n".join(detail))
+                self._apply_value(default_value)
+                return
+            if key == "l" and light:
+                self._apply_value(light)
+                return
+            if key == "d" and dark:
+                self._apply_value(dark)
                 return
             if key in (KEY_ESC, "n", "N", "m", "q"):
                 return
@@ -540,15 +629,17 @@ class App:
 
     def show_done_screen(self, finals: bool) -> str:
         self.save()
-        pool = self._pool_for(finals)
-        ranked = ranking.ranking_names(pool, self.state.comparisons)
-        winner = ranked[0] if ranked else "(none)"
+        groups = self._groups_for(finals)
         title = "Finals complete!" if finals else "All comparisons done!"
-        body = [
-            f"Top theme: {BOLD}{winner}{RESET}",
+        shown = [g for g in ("light", "dark") if groups.get(g)] or ["dark"]
+        body = []
+        for group in shown:
+            ranked = ranking.ranking_names(groups[group], self.state.comparisons)
+            body.append(f"Top {group}: {BOLD}{ranked[0] if ranked else '(none)'}{RESET}")
+        body += [
             "",
-            "Open the menu to view the full ranking, run a finals round,",
-            "or apply a theme to your Ghostty config.",
+            "Open the menu to view leaderboards, run a finals round,",
+            "or apply theme(s) to your Ghostty config.",
             "",
             f"{BOLD}[m]{RESET} menu    {BOLD}[Esc]{RESET} quit",
         ]

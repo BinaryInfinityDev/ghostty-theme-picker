@@ -1,29 +1,35 @@
 """Persistent state for a comparison session, stored as TOML.
 
 The state file is both the durable record of a session (so it can be resumed)
-and the deliverable the user asked for: a ranked list plus the themes they
-excluded. Its schema::
+and the deliverable: separate ranked lists for light and dark themes, plus the
+themes the user excluded. Its schema::
 
     version  = 1
-    selected = "Theme Name"        # chosen theme (optional)
-    pool      = ["A", "B", ...]    # universe for this session (optional)
-    excluded  = ["Bad", ...]       # vetoed themes
-    favorites = ["Great", ...]     # finalists
-    ranking   = ["A", "C", "B"]    # cached ranking, best first
+    selected = "light:Foo,dark:Bar"   # what was last applied (optional)
+    scheme    = "all"                 # all | light | dark -- which group(s) to compare
+    pool      = ["A", "B", ...]       # universe for this session (optional)
+    excluded  = ["Bad", ...]          # vetoed themes
+    favorites = ["Great", ...]        # finalists
+    ranking_light = ["A", "C", ...]   # cached light leaderboard, best first
+    ranking_dark  = ["X", "Y", ...]   # cached dark leaderboard, best first
 
     [filters]
-    exclude_light = false
-    exclude_dark  = false
-    min_contrast  = 1.0
+    min_contrast = 1.0
 
     [[comparison]]
     winner = "A"
     loser  = "B"
 
-``pool`` lets a user start from a subset: list the themes you want to consider
-and the tool restricts the tournament to them. ``excluded`` removes themes
-entirely. Active themes for a session are ``pool`` (or all discovered themes)
-minus ``excluded`` minus anything cut by the property filters.
+Themes are classified light/dark with Ghostty's own logic (see
+``color.ghostty_luminance``). Comparisons only ever happen *within* a group, so
+the two leaderboards are fully independent. ``scheme`` lets the user restrict a
+session to just light or just dark themes.
+
+Sets:
+* **considered** = ``pool`` (or all discovered) minus ``excluded`` minus the
+  contrast filter. Both leaderboards are computed over this set.
+* **active**     = considered, further restricted to the chosen ``scheme``.
+  This is what gets compared.
 """
 
 from __future__ import annotations
@@ -37,44 +43,39 @@ from . import ranking
 from .themes import Theme
 from .toml_writer import format_keyval
 
+SCHEMES = ("all", "light", "dark")
+
 
 @dataclass
 class Filters:
-    exclude_light: bool = False
-    exclude_dark: bool = False
     min_contrast: float = 1.0  # WCAG ratio; 1.0 means "no filter"
 
     def is_active(self) -> bool:
-        return self.exclude_light or self.exclude_dark or self.min_contrast > 1.0
+        return self.min_contrast > 1.0
 
     def rejects(self, theme: Theme) -> bool:
-        if self.exclude_light and theme.is_light:
-            return True
-        if self.exclude_dark and not theme.is_light:
-            return True
-        if theme.contrast < self.min_contrast:
-            return True
-        return False
+        return theme.contrast < self.min_contrast
 
 
 @dataclass
 class State:
     version: int = 1
     selected: str | None = None
+    scheme: str = "all"
     pool: list[str] | None = None
     excluded: list[str] = field(default_factory=list)
     favorites: list[str] = field(default_factory=list)
-    ranking: list[str] = field(default_factory=list)
+    ranking_light: list[str] = field(default_factory=list)
+    ranking_dark: list[str] = field(default_factory=list)
     filters: Filters = field(default_factory=Filters)
     comparisons: list[tuple[str, str]] = field(default_factory=list)
 
     # ---- derived sets -----------------------------------------------------
 
-    def active_themes(self, available: dict[str, Theme]) -> list[str]:
-        """Themes still in play: pool (or all) minus excluded minus filtered.
+    def considered_themes(self, available: dict[str, Theme]) -> list[str]:
+        """Pool (or all) minus excluded minus the contrast filter.
 
-        ``available`` is the discovered ``name -> Theme`` map; only themes we
-        actually have are returned, in a stable order.
+        Independent of ``scheme`` -- both leaderboards are built from this.
         """
         if self.pool is not None:
             base = [n for n in self.pool if n in available]
@@ -90,9 +91,31 @@ class State:
             result.append(name)
         return result
 
+    def considered_groups(self, available: dict[str, Theme]) -> dict[str, list[str]]:
+        groups: dict[str, list[str]] = {"light": [], "dark": []}
+        for name in self.considered_themes(available):
+            groups[available[name].scheme].append(name)
+        return groups
+
+    def active_themes(self, available: dict[str, Theme]) -> list[str]:
+        """Considered themes restricted to the chosen scheme."""
+        result = []
+        for name in self.considered_themes(available):
+            if self.scheme == "all" or self.scheme == available[name].scheme:
+                result.append(name)
+        return result
+
+    def active_groups(self, available: dict[str, Theme]) -> dict[str, list[str]]:
+        """Active themes partitioned by scheme (the group(s) being compared)."""
+        groups: dict[str, list[str]] = {"light": [], "dark": []}
+        for name in self.active_themes(available):
+            groups[available[name].scheme].append(name)
+        return groups
+
+    # ---- mutations --------------------------------------------------------
+
     def record(self, winner: str, loser: str) -> None:
         key = ranking.pair_key(winner, loser)
-        # Replace any prior verdict for this matchup.
         self.comparisons = [
             (w, l) for (w, l) in self.comparisons if ranking.pair_key(w, l) != key
         ]
@@ -111,11 +134,21 @@ class State:
         self.favorites.append(name)
         return True
 
-    def recompute_ranking(self, available: dict[str, Theme]) -> list[str]:
-        self.ranking = ranking.ranking_names(
-            self.active_themes(available), self.comparisons
-        )
-        return self.ranking
+    # ---- leaderboards -----------------------------------------------------
+
+    def recompute_rankings(
+        self, available: dict[str, Theme]
+    ) -> tuple[list[str], list[str]]:
+        groups = self.considered_groups(available)
+        self.ranking_light = ranking.ranking_names(groups["light"], self.comparisons)
+        self.ranking_dark = ranking.ranking_names(groups["dark"], self.comparisons)
+        return self.ranking_light, self.ranking_dark
+
+    def top_light(self) -> str | None:
+        return self.ranking_light[0] if self.ranking_light else None
+
+    def top_dark(self) -> str | None:
+        return self.ranking_dark[0] if self.ranking_dark else None
 
     # ---- serialization ----------------------------------------------------
 
@@ -124,16 +157,16 @@ class State:
         lines.append(format_keyval("version", self.version))
         if self.selected:
             lines.append(format_keyval("selected", self.selected))
+        lines.append(format_keyval("scheme", self.scheme))
         if self.pool is not None:
             lines.append(format_keyval("pool", list(self.pool)))
         lines.append(format_keyval("excluded", list(self.excluded)))
         lines.append(format_keyval("favorites", list(self.favorites)))
-        lines.append(format_keyval("ranking", list(self.ranking)))
+        lines.append(format_keyval("ranking_light", list(self.ranking_light)))
+        lines.append(format_keyval("ranking_dark", list(self.ranking_dark)))
 
         lines.append("")
         lines.append("[filters]")
-        lines.append(format_keyval("exclude_light", self.filters.exclude_light))
-        lines.append(format_keyval("exclude_dark", self.filters.exclude_dark))
         lines.append(format_keyval("min_contrast", float(self.filters.min_contrast)))
 
         for winner, loser in self.comparisons:
@@ -147,27 +180,40 @@ class State:
     @classmethod
     def from_dict(cls, data: dict) -> "State":
         filters_data = data.get("filters", {}) or {}
-        filters = Filters(
-            exclude_light=bool(filters_data.get("exclude_light", False)),
-            exclude_dark=bool(filters_data.get("exclude_dark", False)),
-            min_contrast=float(filters_data.get("min_contrast", 1.0)),
-        )
+        filters = Filters(min_contrast=float(filters_data.get("min_contrast", 1.0)))
+
+        scheme = data.get("scheme")
+        if scheme not in SCHEMES:
+            # Back-compat with the old exclude_light/exclude_dark filters.
+            el = bool(filters_data.get("exclude_light", False))
+            ed = bool(filters_data.get("exclude_dark", False))
+            if el and not ed:
+                scheme = "dark"
+            elif ed and not el:
+                scheme = "light"
+            else:
+                scheme = "all"
+
         comparisons: list[tuple[str, str]] = []
         for entry in data.get("comparison", []) or []:
             winner = entry.get("winner")
             loser = entry.get("loser")
             if isinstance(winner, str) and isinstance(loser, str):
                 comparisons.append((winner, loser))
+
         pool = data.get("pool")
         if pool is not None:
             pool = [str(x) for x in pool]
+
         return cls(
             version=int(data.get("version", 1)),
             selected=data.get("selected"),
+            scheme=scheme,
             pool=pool,
             excluded=[str(x) for x in data.get("excluded", []) or []],
             favorites=[str(x) for x in data.get("favorites", []) or []],
-            ranking=[str(x) for x in data.get("ranking", []) or []],
+            ranking_light=[str(x) for x in data.get("ranking_light", []) or []],
+            ranking_dark=[str(x) for x in data.get("ranking_dark", []) or []],
             filters=filters,
             comparisons=comparisons,
         )

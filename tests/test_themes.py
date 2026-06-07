@@ -50,6 +50,14 @@ class ParseThemeTests(unittest.TestCase):
         self.assertFalse(dark.is_light)
         self.assertGreater(light.contrast, 20)
 
+    def test_scheme_property(self):
+        light = parse_theme_text("background = ffffff", name="L")
+        dark = parse_theme_text("background = 000000", name="D")
+        self.assertEqual(light.scheme, "light")
+        self.assertEqual(dark.scheme, "dark")
+        self.assertTrue(dark.is_dark)
+        self.assertFalse(light.is_dark)
+
 
 class DiscoveryTests(unittest.TestCase):
     def test_load_sample_themes(self):
