@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghostty-theme-picker"
+version = "0.1.0"
+description = "Rank Ghostty themes by comparing them side by side, two at a time."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "ghostty-theme-picker contributors" }]
+keywords = ["ghostty", "terminal", "themes", "tui", "colors"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Topic :: Terminals",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/binaryinfinitydev/ghostty-theme-picker"
+Repository = "https://github.com/binaryinfinitydev/ghostty-theme-picker"
+
+[project.scripts]
+ghostty-theme-picker = "ghostty_theme_picker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
