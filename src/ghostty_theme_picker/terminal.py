@@ -42,6 +42,24 @@ def get_size() -> Size:
     return Size(cols=size.columns, rows=size.lines)
 
 
+def compose_frame(text: str) -> str:
+    """Turn a ``\\n``-separated frame into absolutely-positioned ANSI output.
+
+    Each line is drawn at column 1 of its row (``ESC[row;1H``) after clearing
+    that line (``ESC[2K``); a trailing ``ESC[J`` wipes any rows left over from
+    a previously taller frame. This is safe in raw mode, where ``\\n`` is a
+    bare line feed that does not return the cursor to column 1.
+    """
+    lines = text.split("\n")
+    parts = ["\x1b[H"]
+    for i, line in enumerate(lines):
+        parts.append(f"\x1b[{i + 1};1H\x1b[2K")
+        parts.append(line)
+    # Park below the frame and clear anything beneath it.
+    parts.append(f"\x1b[{len(lines) + 1};1H\x1b[J")
+    return "".join(parts)
+
+
 class Terminal:
     """Context manager: raw mode + alternate screen + hidden cursor."""
 
@@ -72,8 +90,17 @@ class Terminal:
         self.out_stream.flush()
 
     def render(self, text: str) -> None:
-        """Clear the screen and draw a frame in one write to avoid flicker."""
-        self.write("\x1b[H\x1b[2J" + text)
+        """Draw a full frame, positioning each row explicitly.
+
+        Raw mode disables output post-processing (``OPOST``/``ONLCR``), so a
+        bare ``\\n`` moves the cursor down *without* returning to column 1 --
+        which would cascade the frame diagonally across the screen. We instead
+        place every row at column 1 with an absolute cursor move, clear each
+        line as we go, and erase anything left below from a taller prior frame.
+        Positioning absolutely also discards any pending auto-wrap from a
+        full-width line.
+        """
+        self.write(compose_frame(text))
         self.flush()
 
     def read_key(self, timeout: float | None = None) -> str | None:
